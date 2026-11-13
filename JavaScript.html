@@ -1,0 +1,180 @@
+<script>
+  const state = { data:null, activeTab:'home', filters:{q:'',artist:'',decade:'',origin:''} };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    bindShell();
+    loadData(false);
+  });
+
+  function bindShell(){
+    document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.tab)));
+    document.getElementById('refreshBtn').addEventListener('click', () => loadData(true));
+    document.getElementById('modalClose').addEventListener('click', closeModal);
+    document.getElementById('modal').addEventListener('click', e => { if(e.target.id === 'modal') closeModal(); });
+  }
+
+  function loadData(force){
+    showLoader(true);
+    const runner = google.script.run
+      .withSuccessHandler(data => { state.data = data; renderAll(); showLoader(false); })
+      .withFailureHandler(err => { showLoader(false); toast(err.message || String(err)); });
+    force ? runner.refreshBootstrapData() : runner.getBootstrapData();
+  }
+
+  function renderAll(){ renderHome(); renderCollection(); renderArtists(); renderStats(); }
+
+  function showTab(tab){
+    state.activeTab = tab;
+    document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
+    document.querySelectorAll('.panel').forEach(x => x.classList.toggle('active', x.id === tab));
+  }
+
+  function renderHome(){
+    const {stats,recommendations} = state.data;
+    const hero = recommendations[0];
+    document.getElementById('home').innerHTML = `
+      ${kpis(stats)}
+      ${hero ? recommendationHero(hero) : '<div class="empty">No pude generar una recomendación.</div>'}
+      ${recommendations.length > 1 ? `<div class="section-head"><h2>También podrías escuchar…</h2></div><div class="secondary-recs">${recommendations.slice(1).map(miniRec).join('')}</div>` : ''}
+    `;
+    bindAlbumLinks(document.getElementById('home'));
+    document.querySelectorAll('[data-listened]').forEach(btn => btn.addEventListener('click', e => markListened(e.currentTarget.dataset.listened)));
+    document.querySelectorAll('[data-replace]').forEach(btn => btn.addEventListener('click', e => replaceRec(e.currentTarget.dataset.replace)));
+  }
+
+  function kpis(s){
+    return `<div class="kpi-grid">
+      ${kpi(s.totalCopies,'Copias')}
+      ${kpi(s.uniqueAlbums,'Álbumes distintos')}
+      ${kpi(s.artistCount,'Artistas')}
+      ${kpi(formatNumber(s.avgCopiesPerArtist),'Copias / artista')}
+      ${kpi(formatNumber(s.avgUniqueAlbumsPerArtist),'Álbumes distintos / artista')}
+    </div>`;
+  }
+  function kpi(v,l){ return `<div class="kpi"><div class="value">${escapeHtml(v)}</div><div class="label">${l}</div></div>`; }
+
+  function recommendationHero(a){
+    return `<div class="hero-rec">
+      ${cover(a,'large')}
+      <div class="rec-meta">
+        <div class="overline">Disco del día</div>
+        <div class="rec-title">${escapeHtml(a.title)}</div>
+        <div class="rec-artist">${escapeHtml(a.displayArtist)}</div>
+        <div class="meta-line">${[a.releaseYear,a.editionYear ? `ed. ${a.editionYear}`:'',a.origin].filter(Boolean).join(' · ')}</div>
+        <div class="chip-row">${scoreChips(a)}</div>
+        ${a.note ? `<div class="meta-line">${escapeHtml(a.note)}</div>`:''}
+        <div class="actions">
+          <button class="primary-btn" data-listened="${a.id}">Ya lo escuché</button>
+          <button class="secondary-btn" data-replace="${a.id}">Otra sugerencia</button>
+          <button class="ghost-btn album-link" data-album-id="${a.id}">Ver ficha</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function miniRec(a){
+    return `<div class="mini-rec album-link" data-album-id="${a.id}">${cover(a)}<div><div class="muted" style="font-size:12px">Recomendación adicional</div><h3>${escapeHtml(a.title)}</h3><div class="muted">${escapeHtml(a.displayArtist)}</div></div></div>`;
+  }
+
+  function renderCollection(){
+    const albums = state.data.collection;
+    const artists = [...new Set(albums.map(a=>a.displayArtist))].sort((a,b)=>a.localeCompare(b));
+    const decades = [...new Set(albums.filter(a=>a.releaseYear).map(a=>`${Math.floor(a.releaseYear/10)*10}s`))].sort();
+    const origins = [...new Set(albums.map(a=>a.origin||'Sin dato'))].sort();
+    document.getElementById('collection').innerHTML = `
+      <div class="section-head"><div><h2>Colección</h2><div class="muted">Galería de copias activas</div></div></div>
+      <div class="filterbar">
+        <input id="qFilter" placeholder="Buscar título o artista…" value="${escapeAttr(state.filters.q)}">
+        <select id="artistFilter"><option value="">Todos los artistas</option>${artists.map(x=>`<option ${state.filters.artist===x?'selected':''}>${escapeHtml(x)}</option>`).join('')}</select>
+        <select id="decadeFilter"><option value="">Todas las décadas</option>${decades.map(x=>`<option ${state.filters.decade===x?'selected':''}>${x}</option>`).join('')}</select>
+        <select id="originFilter"><option value="">Todos los orígenes</option>${origins.map(x=>`<option ${state.filters.origin===x?'selected':''}>${escapeHtml(x)}</option>`).join('')}</select>
+      </div>
+      <div id="collectionGrid"></div>`;
+    ['qFilter','artistFilter','decadeFilter','originFilter'].forEach(id=>document.getElementById(id).addEventListener(id==='qFilter'?'input':'change', updateFilters));
+    renderCollectionGrid();
+  }
+
+  function updateFilters(){
+    state.filters.q = document.getElementById('qFilter').value;
+    state.filters.artist = document.getElementById('artistFilter').value;
+    state.filters.decade = document.getElementById('decadeFilter').value;
+    state.filters.origin = document.getElementById('originFilter').value;
+    renderCollectionGrid();
+  }
+
+  function renderCollectionGrid(){
+    const q = state.filters.q.toLowerCase().trim();
+    const filtered = state.data.collection.filter(a=>{
+      const decade = a.releaseYear ? `${Math.floor(a.releaseYear/10)*10}s` : '';
+      return (!q || `${a.title} ${a.displayArtist}`.toLowerCase().includes(q)) &&
+        (!state.filters.artist || a.displayArtist===state.filters.artist) &&
+        (!state.filters.decade || decade===state.filters.decade) &&
+        (!state.filters.origin || (a.origin||'Sin dato')===state.filters.origin);
+    }).sort((a,b)=>a.displayArtist.localeCompare(b.displayArtist)||a.releaseYear-b.releaseYear||a.title.localeCompare(b.title));
+    const el = document.getElementById('collectionGrid');
+    el.innerHTML = filtered.length ? `<div class="muted" style="margin-bottom:12px">${filtered.length} resultados</div><div class="album-grid">${filtered.map(albumCard).join('')}</div>` : '<div class="empty">No hay discos con esos filtros.</div>';
+    bindAlbumLinks(el);
+  }
+
+  function albumCard(a){
+    return `<article class="album-card album-link" data-album-id="${a.id}">${cover(a)}<div class="album-body"><div class="album-title">${escapeHtml(a.title)}</div><div class="album-artist">${escapeHtml(a.displayArtist)}</div><div class="album-extra">${[a.releaseYear,a.editionYear?`ed. ${a.editionYear}`:'',a.origin].filter(Boolean).join(' · ')}</div></div></article>`;
+  }
+
+  function renderArtists(){
+    const cards = state.data.stats.artists.map(x=>`<div class="artist-card" data-artist="${escapeAttr(x.artist)}"><h3>${escapeHtml(x.artist)}</h3><div class="artist-stats"><span>${x.copies} copias</span><span>${x.uniqueAlbums} álbumes distintos</span></div></div>`).join('');
+    document.getElementById('artists').innerHTML = `<div class="section-head"><div><h2>Artistas</h2><div class="muted">Representación dentro de la colección</div></div></div><div class="artist-grid">${cards}</div>`;
+    document.querySelectorAll('.artist-card').forEach(el=>el.addEventListener('click',()=>openArtist(el.dataset.artist)));
+  }
+
+  function openArtist(artist){
+    const albums = state.data.collection.filter(a=>a.displayArtist===artist).sort((a,b)=>(a.releaseYear||9999)-(b.releaseYear||9999));
+    openModal(`<h2>${escapeHtml(artist)}</h2><div class="muted" style="margin-bottom:18px">${albums.length} copias · ${new Set(albums.map(a=>a.title.toLowerCase())).size} álbumes distintos</div><div class="album-grid">${albums.map(albumCard).join('')}</div>`);
+    bindAlbumLinks(document.getElementById('modalContent'));
+  }
+
+  function renderStats(){
+    const s = state.data.stats;
+    document.getElementById('stats').innerHTML = `
+      ${kpis(s)}
+      <div class="stats-grid">
+        ${barCard('Artistas con más copias', s.artists.slice(0,12).map(x=>({label:x.artist,value:x.copies})))}
+        ${barCard('Por década', s.byDecade.sort((a,b)=>a.label.localeCompare(b.label)))}
+        ${barCard('Origen', s.byOrigin.sort((a,b)=>b.value-a.value))}
+        ${barCard('Tiendas con más compras', s.byStore.filter(x=>x.label!=='Sin dato').slice(0,12))}
+        ${barCard('Compras por año', s.purchasesByYear)}
+      </div>`;
+  }
+
+  function barCard(title, rows){
+    const max = Math.max(1,...rows.map(x=>x.value));
+    return `<div class="chart-card"><h3>${escapeHtml(title)}</h3><div class="bar-list">${rows.map(x=>`<div class="bar-row"><div>${escapeHtml(x.label)}</div><div class="bar-track"><div class="bar-fill" style="width:${(x.value/max)*100}%"></div></div><div class="bar-value">${x.value}</div></div>`).join('')}</div></div>`;
+  }
+
+  function openAlbum(id){
+    const a = state.data.collection.find(x=>String(x.id)===String(id)); if(!a) return;
+    openModal(`<div class="detail-grid">${cover(a,'large')}<div><h2>${escapeHtml(a.title)}</h2><div class="rec-artist">${escapeHtml(a.displayArtist)}</div><div class="chip-row">${scoreChips(a)}</div><div class="detail-list">
+      ${detail('Año lanzamiento',a.releaseYear)}${detail('Año edición',a.editionYear)}${detail('Origen',a.origin)}${detail('Comprado en',a.purchasedAt)}${detail('Fecha compra',formatDate(a.purchaseDate))}${detail('Condición',a.condition)}${detail('Características',a.features)}${detail('Nota',a.note)}
+    </div>${a.discogsUrl?`<div class="actions"><a class="ghost-btn" href="${escapeAttr(a.discogsUrl)}" target="_blank" style="text-decoration:none">Abrir en Discogs</a></div>`:''}</div></div>`);
+  }
+  function detail(k,v){return v?`<div class="k">${escapeHtml(k)}</div><div>${escapeHtml(v)}</div>`:''}
+  function scoreChips(a){
+    return [['Memoria',a.personalMemory],['Curatorial',a.curatorialValue],['Escucha',a.listeningProbability],['Edición',a.editionInterest]].filter(x=>x[1]!=null).map(x=>`<span class="chip">${x[0]} ${x[1]}/5</span>`).join('');
+  }
+
+  function cover(a,size){
+    return `<div class="cover-wrap">${a.coverUrl?`<img src="${escapeAttr(a.coverUrl)}" alt="Portada de ${escapeAttr(a.title)}" loading="lazy" onerror="this.remove();this.parentNode.innerHTML='<div class=\\'cover-fallback\\'>${escapeJs(a.title)}</div>'">`:`<div class="cover-fallback">${escapeHtml(a.title)}</div>`}</div>`;
+  }
+
+  function bindAlbumLinks(root){ root.querySelectorAll('.album-link').forEach(el=>el.addEventListener('click',e=>{e.stopPropagation();openAlbum(el.dataset.albumId)})); }
+  function markListened(id){ google.script.run.withSuccessHandler(()=>toast('Marcado como escuchado')).withFailureHandler(e=>toast(e.message)).markRecommendationListened(id); }
+  function replaceRec(id){ google.script.run.withSuccessHandler(a=>{ if(a){ state.data.recommendations[0]=a; renderHome(); toast('Nueva sugerencia'); } }).withFailureHandler(e=>toast(e.message)).replaceRecommendation(id); }
+  function openModal(html){ document.getElementById('modalContent').innerHTML=html; document.getElementById('modal').classList.remove('hidden'); }
+  function closeModal(){ document.getElementById('modal').classList.add('hidden'); }
+  function showLoader(on){ document.getElementById('loader').style.display=on?'flex':'none'; }
+  function toast(msg){ const el=document.getElementById('toast');el.textContent=msg;el.classList.remove('hidden');setTimeout(()=>el.classList.add('hidden'),2500); }
+  function formatNumber(n){return Number(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}
+  function formatDate(s){if(!s)return'';const m=String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);return m?`${m[3]}/${m[2]}/${m[1]}`:s}
+  function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+  function escapeAttr(v){return escapeHtml(v).replace(/`/g,'&#96;')}
+  function escapeJs(v){return String(v??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/</g,'&lt;')}
+</script>

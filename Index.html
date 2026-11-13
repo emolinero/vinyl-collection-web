@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <?!= include('Stylesheet'); ?>
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Colecciones</div>
+        <h1>Vinilos</h1>
+      </div>
+      <button class="ghost-btn" id="refreshBtn" title="Actualizar datos">↻ Actualizar</button>
+    </header>
+
+    <nav class="tabs" aria-label="Secciones">
+      <button class="tab active" data-tab="home">Inicio</button>
+      <button class="tab" data-tab="collection">Colección</button>
+      <button class="tab" data-tab="artists">Artistas</button>
+      <button class="tab" data-tab="stats">Estadísticas</button>
+    </nav>
+
+    <main>
+      <section id="home" class="panel active"></section>
+      <section id="collection" class="panel"></section>
+      <section id="artists" class="panel"></section>
+      <section id="stats" class="panel"></section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button id="modalClose" class="modal-close">×</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="loader" class="loader-wrap"><div class="loader"></div><div>Cargando colección…</div></div>
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
